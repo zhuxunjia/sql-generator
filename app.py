@@ -610,23 +610,48 @@ with col_config:
                             st.rerun()
         
         st.markdown("---")
-        st.subheader("DISTINCT")
-        distinct_enabled = st.checkbox("去重（SELECT DISTINCT）", value=st.session_state.distinct, key="distinct_checkbox")
-        if distinct_enabled != st.session_state.distinct:
-            st.session_state.distinct = distinct_enabled
-            rebuild_query()
+        st.subheader("其他设置")
         
-        st.markdown("---")
-        st.subheader("LIMIT")
-        col1, col2 = st.columns(2)
-        with col1:
-            limit_value = st.number_input("限制行数", min_value=0, value=st.session_state.limit_config['limit'], step=100, key="limit_input")
-        with col2:
-            offset_value = st.number_input("偏移量", min_value=0, value=st.session_state.limit_config['offset'], step=100, key="offset_input")
-        
-        if limit_value != st.session_state.limit_config['limit'] or offset_value != st.session_state.limit_config['offset']:
-            st.session_state.limit_config = {'limit': limit_value, 'offset': offset_value}
-            rebuild_query()
+        with st.form("other_settings_form"):
+            distinct_enabled = st.checkbox(
+                "去重（SELECT DISTINCT）", 
+                value=st.session_state.distinct
+            )
+            
+            st.markdown("**LIMIT**")
+            col1, col2 = st.columns(2)
+            with col1:
+                limit_value = st.number_input(
+                    "限制行数", 
+                    min_value=0, 
+                    value=st.session_state.limit_config['limit'], 
+                    step=100
+                )
+            with col2:
+                offset_value = st.number_input(
+                    "偏移量", 
+                    min_value=0, 
+                    value=st.session_state.limit_config['offset'], 
+                    step=100
+                )
+            
+            if st.form_submit_button("✓ 应用设置", use_container_width=True):
+                # 只有点击按钮才更新
+                changed = False
+                
+                if distinct_enabled != st.session_state.distinct:
+                    st.session_state.distinct = distinct_enabled
+                    changed = True
+                
+                if limit_value != st.session_state.limit_config['limit'] or \
+                   offset_value != st.session_state.limit_config['offset']:
+                    st.session_state.limit_config = {'limit': limit_value, 'offset': offset_value}
+                    changed = True
+                
+                if changed:
+                    rebuild_query()
+                    st.success("✓ 设置已应用")
+                    st.rerun()
     
     # ===== Tab 5: GROUP BY =====
     with tab5:

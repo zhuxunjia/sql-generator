@@ -12,6 +12,7 @@ from enum import Enum
 import json
 import sqlparse
 from sqlparse import sql, tokens
+
 # ============= 第一部分：核心数据结构 =============
 
 @dataclass
@@ -309,84 +310,85 @@ class UniversalQueryBuilder:
         return "\n".join(lines) + ";"
 
     def validate_sql(self, sql_text: str = None) -> dict:
-            """
-            验证SQL语法
-            返回: {
-                "valid": bool,
-                "formatted": str,  # 格式化后的SQL
-                "errors": list,    # 错误列表（如果有）
-                "warnings": list   # 警告列表
-            }
-            """
-            if sql_text is None:
-                sql_text = self.to_sql()
+        """
+        验证SQL语法
+        返回: {
+            "valid": bool,
+            "formatted": str,  # 格式化后的SQL
+            "errors": list,    # 错误列表（如果有）
+            "warnings": list   # 警告列表
+        }
+        """
+        if sql_text is None:
+            sql_text = self.to_sql()
+        
+        result = {
+            "valid": True,
+            "formatted": "",
+            "errors": [],
+            "warnings": []
+        }
+        
+        try:
+            # 解析SQL
+            parsed = sqlparse.parse(sql_text)
             
-            result = {
-                "valid": True,
-                "formatted": "",
-                "errors": [],
-                "warnings": []
-            }
+            if not parsed:
+                result["valid"] = False
+                result["errors"].append("无法解析SQL语句")
+                return result
             
-            try:
-                # 解析SQL
-                parsed = sqlparse.parse(sql_text)
-                
-                if not parsed:
-                    result["valid"] = False
-                    result["errors"].append("无法解析SQL语句")
-                    return result
-                
-                # 格式化SQL（美化输出）
-                result["formatted"] = sqlparse.format(
-                    sql_text,
-                    reindent=True,
-                    keyword_case='upper',
-                    indent_width=2
-                )
-                
-                # 基本语法检查
-                statement = parsed[0]
-                
-                # 检查是否是SELECT语句
-                if statement.get_type() != 'SELECT':
-                    result["warnings"].append(f"检测到非SELECT语句: {statement.get_type()}")
-                
-                # 检查括号匹配
-                token_list = list(statement.flatten())
-                paren_count = 0
-                for token in token_list:
-                    if token.match(tokens.Punctuation, '('):
-                        paren_count += 1
-                    elif token.match(tokens.Punctuation, ')'):
-                        paren_count -= 1
-                    if paren_count < 0:
-                        result["valid"] = False
-                        result["errors"].append("括号不匹配")
-                        break
-                
-                if paren_count != 0:
+            # 格式化SQL（美化输出）
+            result["formatted"] = sqlparse.format(
+                sql_text,
+                reindent=True,
+                keyword_case='upper',
+                indent_width=2
+            )
+            
+            # 基本语法检查
+            statement = parsed[0]
+            
+            # 检查是否是SELECT语句
+            if statement.get_type() != 'SELECT':
+                result["warnings"].append(f"检测到非SELECT语句: {statement.get_type()}")
+            
+            # 检查括号匹配
+            token_list = list(statement.flatten())
+            paren_count = 0
+            for token in token_list:
+                if token.match(tokens.Punctuation, '('):
+                    paren_count += 1
+                elif token.match(tokens.Punctuation, ')'):
+                    paren_count -= 1
+                if paren_count < 0:
                     result["valid"] = False
                     result["errors"].append("括号不匹配")
-                
-                # 检查常见错误
-                sql_lower = sql_text.lower()
-                
-                # 检查是否有未闭合的引号
-                single_quotes = sql_text.count("'")
-                if single_quotes % 2 != 0:
-                    result["warnings"].append("可能存在未闭合的单引号")
-                
-                # 检查SELECT *（可选的代码规范检查）
-                if "select *" in sql_lower or "select  *" in sql_lower:
-                    result["warnings"].append("使用了SELECT *，建议明确指定字段")
-                
-            except Exception as e:
-                result["valid"] = False
-                result["errors"].append(f"解析错误: {str(e)}")
+                    break
             
-            return result
-   def to_natural_language(self) -> str:
+            if paren_count != 0:
+                result["valid"] = False
+                result["errors"].append("括号不匹配")
+            
+            # 检查常见错误
+            sql_lower = sql_text.lower()
+            
+            # 检查是否有未闭合的引号
+            single_quotes = sql_text.count("'")
+            if single_quotes % 2 != 0:
+                result["warnings"].append("可能存在未闭合的单引号")
+            
+            # 检查SELECT *（可选的代码规范检查）
+            if "select *" in sql_lower or "select  *" in sql_lower:
+                result["warnings"].append("使用了SELECT *，建议明确指定字段")
+            
+        except Exception as e:
+            result["valid"] = False
+            result["errors"].append(f"解析错误: {str(e)}")
+        
+        return result
+    
+    def to_natural_language(self) -> str:
         """将SQL配置转换为自然语言描述"""
         parts = []
         
@@ -459,8 +461,8 @@ class UniversalQueryBuilder:
         
         # 5. GROUP BY
         if self.group_by:
-            parts.append(f"\n\n**分组**：按 {', '.join(self.group_by)} 分组")
-            if hasattr(self, 'having_conditions') and self.having_conditions:
+            parts.append(f"\n\n**分组**：按 {', '.join(self.group_by.fields)} 分组")
+            if self.group_by.having_conditions:
                 parts.append("，并应用HAVING条件")
         
         # 6. CASE WHEN
@@ -474,7 +476,7 @@ class UniversalQueryBuilder:
             parts.append("\n\n**窗口函数**：")
             for wf in self.window_functions:
                 parts.append(f"\n- {wf.alias}：{wf.function_name}")
-                if hasattr(wf, 'partition_by') and wf.partition_by:
+                if wf.partition_by:
                     parts.append(f" PARTITION BY {', '.join(wf.partition_by)}")
         
         # 8. 排序
@@ -497,6 +499,8 @@ class UniversalQueryBuilder:
             result += "。"
         
         return result
+
+
 # ============= 第四部分：配置序列化（可以保存/加载配置）=============
 
 def save_query_config(builder: UniversalQueryBuilder, filename: str):

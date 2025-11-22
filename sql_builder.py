@@ -386,7 +386,117 @@ class UniversalQueryBuilder:
                 result["errors"].append(f"解析错误: {str(e)}")
             
             return result
-
+   def to_natural_language(self) -> str:
+        """将SQL配置转换为自然语言描述"""
+        parts = []
+        
+        # 1. 基本查询意图
+        if self.distinct:
+            parts.append("查询去重后的数据")
+        else:
+            parts.append("查询数据")
+        
+        # 2. 主表
+        if self.tables:
+            main_table = self.tables[0]
+            parts.append(f"，从 **{main_table.table_name}** 表")
+            if main_table.selected_fields:
+                fields_str = "、".join(main_table.selected_fields)
+                parts.append(f"（字段：{fields_str}）")
+        
+        # 3. JOIN关系
+        if self.joins:
+            join_parts = []
+            for join in self.joins:
+                join_type_cn = {
+                    "LEFT JOIN": "左连接",
+                    "INNER JOIN": "内连接",
+                    "RIGHT JOIN": "右连接",
+                    "FULL OUTER JOIN": "全外连接"
+                }.get(join.join_type, join.join_type)
+                
+                join_parts.append(
+                    f"{join_type_cn} **{join.right_table.table_name}** 表"
+                    f"（ON {join.left_table_alias}.{join.on_left_field} = {join.right_table.alias}.{join.on_right_field}）"
+                )
+            parts.append("，" + "，".join(join_parts))
+        
+        # 4. 筛选条件
+        if self.filters:
+            parts.append("。\n\n**筛选条件**：")
+            filter_parts = []
+            for i, f in enumerate(self.filters):
+                op_cn = {
+                    "=": "等于",
+                    "!=": "不等于",
+                    ">": "大于",
+                    "<": "小于",
+                    ">=": "大于等于",
+                    "<=": "小于等于",
+                    "IN": "在...之中",
+                    "NOT IN": "不在...之中",
+                    "LIKE": "包含",
+                    "NOT LIKE": "不包含",
+                    "IS NULL": "为空",
+                    "IS NOT NULL": "不为空",
+                    "BETWEEN": "在...之间",
+                    "REGEXP": "匹配正则"
+                }.get(f.operator.value, f.operator.value)
+                
+                logic = "" if i == 0 else f" **{f.logic_operator}** "
+                
+                # 格式化值
+                if isinstance(f.value, list):
+                    value_str = f"[{', '.join(map(str, f.value))}]"
+                elif f.value is None:
+                    value_str = ""
+                else:
+                    value_str = f" {f.value}"
+                
+                filter_parts.append(f"{logic}{f.table_alias}.{f.field} {op_cn}{value_str}")
+            
+            parts.append("\n- " + "\n- ".join(filter_parts))
+        
+        # 5. GROUP BY
+        if self.group_by:
+            parts.append(f"\n\n**分组**：按 {', '.join(self.group_by)} 分组")
+            if hasattr(self, 'having_conditions') and self.having_conditions:
+                parts.append("，并应用HAVING条件")
+        
+        # 6. CASE WHEN
+        if self.case_when:
+            parts.append("\n\n**条件字段**：")
+            for case in self.case_when:
+                parts.append(f"\n- {case.alias}（{len(case.conditions)}个条件分支）")
+        
+        # 7. 窗口函数
+        if self.window_functions:
+            parts.append("\n\n**窗口函数**：")
+            for wf in self.window_functions:
+                parts.append(f"\n- {wf.alias}：{wf.function_name}")
+                if hasattr(wf, 'partition_by') and wf.partition_by:
+                    parts.append(f" PARTITION BY {', '.join(wf.partition_by)}")
+        
+        # 8. 排序
+        if self.order_by:
+            order_parts = []
+            for sort in self.order_by:
+                direction_cn = "升序" if sort.direction == "ASC" else "降序"
+                order_parts.append(f"{sort.table_alias}.{sort.field} {direction_cn}")
+            parts.append(f"\n\n**排序**：按 {', '.join(order_parts)}")
+        
+        # 9. LIMIT
+        if self.limit:
+            limit_text = f"\n\n**限制**：返回 {self.limit} 条记录"
+            if self.offset:
+                limit_text += f"（跳过前 {self.offset} 条）"
+            parts.append(limit_text)
+        
+        result = "".join(parts)
+        if not result.endswith("。"):
+            result += "。"
+        
+        return result
 # ============= 第四部分：配置序列化（可以保存/加载配置）=============
 
 def save_query_config(builder: UniversalQueryBuilder, filename: str):

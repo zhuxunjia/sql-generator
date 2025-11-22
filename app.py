@@ -815,7 +815,157 @@ with col_preview:
             with st.expander("⚠️ 警告信息", expanded=False):
                 for warning in validation['warnings']:
                     st.warning(warning)
+        # 显示自然语言描述
+        st.markdown("---")
+        st.subheader("📝 查询说明")
         
+        try:
+            description = builder.to_natural_language()
+            st.markdown(description)
+            
+            # AI提示词 - 纯需求描述
+            with st.expander("💡 生成SQL需求描述（可直接发给AI）", expanded=False):
+                # 生成详细的需求描述
+                prompt_parts = []
+                
+                # 标题
+                prompt_parts.append("我需要生成一个SQL查询，具体需求如下：\n")
+                
+                # 1. 查询的表和字段
+                prompt_parts.append("**数据来源**：")
+                if builder.tables:
+                    for i, table in enumerate(builder.tables):
+                        if i == 0:
+                            prompt_parts.append(f"\n- 主表：{table.table_name}（别名：{table.alias}）")
+                        else:
+                            prompt_parts.append(f"\n- 关联表：{table.table_name}（别名：{table.alias}）")
+                        
+                        if table.selected_fields:
+                            fields_str = "、".join(table.selected_fields)
+                            prompt_parts.append(f"\n  需要的字段：{fields_str}")
+                
+                # 2. JOIN关系
+                if builder.joins:
+                    prompt_parts.append("\n\n**表关联方式**：")
+                    for join in builder.joins:
+                        join_type_cn = {
+                            "LEFT JOIN": "左连接",
+                            "INNER JOIN": "内连接",
+                            "RIGHT JOIN": "右连接",
+                            "FULL OUTER JOIN": "全外连接"
+                        }.get(join.join_type, join.join_type)
+                        
+                        prompt_parts.append(
+                            f"\n- {join.left_table_alias} 表 {join_type_cn} {join.right_table.alias} 表"
+                            f"\n  连接条件：{join.left_table_alias}.{join.on_left_field} = {join.right_table.alias}.{join.on_right_field}"
+                        )
+                
+                # 3. 筛选条件
+                if builder.filters:
+                    prompt_parts.append("\n\n**筛选条件**：")
+                    for i, f in enumerate(builder.filters):
+                        op_cn = {
+                            "=": "等于",
+                            "!=": "不等于",
+                            ">": "大于",
+                            "<": "小于",
+                            ">=": "大于等于",
+                            "<=": "小于等于",
+                            "IN": "在...之中",
+                            "NOT IN": "不在...之中",
+                            "LIKE": "包含",
+                            "NOT LIKE": "不包含",
+                            "IS NULL": "为空",
+                            "IS NOT NULL": "不为空",
+                            "BETWEEN": "介于...之间",
+                            "REGEXP": "匹配正则表达式"
+                        }.get(f.operator.value, f.operator.value)
+                        
+                        logic = "" if i == 0 else f"{f.logic_operator} "
+                        
+                        # 格式化值
+                        if isinstance(f.value, list):
+                            if f.operator.value == "BETWEEN":
+                                value_str = f"{f.value[0]} 和 {f.value[1]}"
+                            else:
+                                value_str = "、".join(map(str, f.value))
+                        elif f.value is None:
+                            value_str = ""
+                        else:
+                            value_str = f" {f.value}"
+                        
+                        prompt_parts.append(f"\n- {logic}{f.table_alias}.{f.field} {op_cn} {value_str}")
+                
+                # 4. GROUP BY
+                if hasattr(builder, 'group_by') and builder.group_by:
+                    prompt_parts.append(f"\n\n**分组统计**：按 {', '.join(builder.group_by)} 分组")
+                
+                # 5. CASE WHEN
+                if builder.case_when:
+                    prompt_parts.append("\n\n**条件字段**：")
+                    for case in builder.case_when:
+                        prompt_parts.append(f"\n- 创建字段 {case.alias}，根据以下条件赋值：")
+                        for j, (cond, then_val) in enumerate(case.conditions, 1):
+                            prompt_parts.append(f"\n  条件{j}：如果 {cond.to_sql()}，则值为 {then_val}")
+                        if case.else_value:
+                            prompt_parts.append(f"\n  否则值为 {case.else_value}")
+                
+                # 6. 窗口函数
+                if builder.window_functions:
+                    prompt_parts.append("\n\n**窗口函数计算**：")
+                    for wf in builder.window_functions:
+                        wf_desc = f"\n- 计算 {wf.function_name}"
+                        if hasattr(wf, 'field') and wf.field:
+                            wf_desc += f"({wf.field})"
+                        wf_desc += f"，结果命名为 {wf.alias}"
+                        if hasattr(wf, 'partition_by') and wf.partition_by:
+                            wf_desc += f"\n  按 {', '.join(wf.partition_by)} 分区"
+                        if hasattr(wf, 'order_by') and wf.order_by:
+                            order_strs = [f"{o.field} {'升序' if o.direction == 'ASC' else '降序'}" for o in wf.order_by]
+                            wf_desc += f"\n  按 {', '.join(order_strs)} 排序"
+                        prompt_parts.append(wf_desc)
+                
+                # 7. 排序
+                if builder.order_by:
+                    prompt_parts.append("\n\n**结果排序**：")
+                    order_strs = []
+                    for sort in builder.order_by:
+                        direction = "升序" if sort.direction == "ASC" else "降序"
+                        order_strs.append(f"{sort.table_alias}.{sort.field} {direction}")
+                    prompt_parts.append(f"\n- 按 {', '.join(order_strs)}")
+                
+                # 8. 去重
+                if builder.distinct:
+                    prompt_parts.append("\n\n**去重**：需要对结果进行去重")
+                
+                # 9. LIMIT
+                if builder.limit:
+                    limit_text = f"\n\n**返回限制**：只返回 {builder.limit} 条记录"
+                    if builder.offset:
+                        limit_text += f"，跳过前 {builder.offset} 条"
+                    prompt_parts.append(limit_text)
+                
+                # 结尾
+                prompt_parts.append("\n\n请根据以上需求生成对应的SQL查询语句。")
+                
+                prompt = "".join(prompt_parts)
+                
+                st.code(prompt, language="text")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button(
+                        "📋 下载需求描述",
+                        prompt,
+                        file_name="sql_requirements.txt",
+                        mime="text/plain",
+                        use_container_width=True
+                    )
+                with col2:
+                    if st.button("📋 复制到剪贴板", key="copy_prompt", use_container_width=True):
+                        st.info("💡 请手动选择并复制上方文本")
+        except Exception as e:
+            st.error(f"生成描述时出错: {str(e)}")
         # 显示格式化的SQL
         st.markdown("---")
         st.subheader("生成的SQL")
